@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchAdsPage } from "./api.js";
+import { supabase } from "./supabase.js";
 
 const PAGE_SIZE = 25;
 
@@ -52,8 +53,8 @@ function isPaidAd(ad) {
   ).toLowerCase();
   const status = String(ad.promotion_status || ad.payment_status || "").toLowerCase();
   return ["true", "1", "paid", "premium", "promoted", "featured"].includes(paidValue) ||
-    ["paid", "active", "success", "completed"].includes(status) &&
-    Boolean(ad.is_paid || ad.paid || ad.is_premium || ad.premium || ad.promotion_status);
+    (["paid", "active", "success", "completed"].includes(status) &&
+      Boolean(ad.is_paid || ad.paid || ad.is_premium || ad.premium || ad.promotion_status));
 }
 
 function getAdDate(ad) {
@@ -70,6 +71,17 @@ function sortAds(ads) {
   });
 }
 
+const authInputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "12px 14px",
+  border: "1px solid #d1d5db",
+  borderRadius: 10,
+  fontSize: 16,
+  marginTop: 6,
+  marginBottom: 14
+};
+
 export default function App() {
   const [ads, setAds] = useState([]);
   const [category, setCategory] = useState("");
@@ -80,6 +92,33 @@ export default function App() {
   const [total, setTotal] = useState(null);
   const [loading, setLoading] = useState(false);
   const [apiMessage, setApiMessage] = useState("Loading live ads…");
+
+  const [user, setUser] = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthError("Supabase settings missing. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Cloudflare Pages.");
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) setAuthError(error.message);
+      setUser(data?.session?.user ?? null);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => data?.subscription?.unsubscribe();
+  }, []);
 
   useEffect(() => {
     setPage(1);
@@ -138,6 +177,85 @@ export default function App() {
     setPage(1);
   }
 
+  function openLogin() {
+    setAuthError("");
+    setAuthMessage("");
+    setAuthMode("login");
+    setAuthOpen(true);
+  }
+
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+    setAuthError("");
+    setAuthMessage("");
+
+    if (!supabase) {
+      setAuthError("Supabase connect aagala. Cloudflare Pages environment variables check pannunga.");
+      return;
+    }
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError("Email and password enter pannunga.");
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError("Password minimum 6 characters irukkanum.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      if (authMode === "register") {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            emailRedirectTo: window.location.origin
+          }
+        });
+        if (error) throw error;
+
+        if (data?.session) {
+          setUser(data.user);
+          setAuthMessage("Account created and logged in successfully.");
+        } else {
+          setAuthMessage("Registration successful. Email inbox-la verification link check pannunga; verify pannitu login pannunga.");
+          setAuthMode("login");
+          setAuthPassword("");
+        }
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword
+        });
+        if (error) throw error;
+        setUser(data.user);
+        setAuthMessage("Login successful.");
+      }
+    } catch (error) {
+      setAuthError(error?.message || "Authentication failed. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    if (supabase) await supabase.auth.signOut();
+    setUser(null);
+    setAuthMessage("");
+    setAuthError("");
+  }
+
+  function handlePostAdClick(event) {
+    event.preventDefault();
+    if (!user) {
+      openLogin();
+      return;
+    }
+    setAuthError("");
+    setAuthMessage("You are logged in. The ad-posting form and secure API submission are the next step; they are not connected yet.");
+    setAuthOpen(true);
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -145,7 +263,14 @@ export default function App() {
           <span className="brand-mark">24</span><span className="brand-text">Adz<span>.com</span></span>
         </a>
         <div className="top-note">Tamil Nadu Classifieds</div>
-        <a className="post-button" href="#how-to-post">＋ Post Ad</a>
+        {user ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="post-button" onClick={handlePostAdClick}>＋ Post Ad</button>
+            <button className="text-button" onClick={handleLogout} title={user.email || "Logout"}>Logout</button>
+          </div>
+        ) : (
+          <button className="post-button" onClick={handlePostAdClick}>＋ Post Ad</button>
+        )}
       </header>
 
       <main>
@@ -233,6 +358,126 @@ export default function App() {
         <span>Local classifieds for Tamil Nadu.</span>
         <span>© {new Date().getFullYear()} 24Adz.com</span>
       </footer>
+
+      {authOpen && (
+        <div
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setAuthOpen(false);
+              setAuthError("");
+              setAuthMessage("");
+            }
+          }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 16, overflowY: "auto"
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="auth-title"
+            style={{
+              width: "100%", maxWidth: 440, background: "#fff", color: "#171717",
+              borderRadius: 18, padding: 24, boxSizing: "border-box",
+              boxShadow: "0 20px 70px rgba(0,0,0,.35)", position: "relative"
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => { setAuthOpen(false); setAuthError(""); setAuthMessage(""); }}
+              style={{ position: "absolute", right: 14, top: 12, border: 0, background: "transparent", fontSize: 28, cursor: "pointer", color: "#555" }}
+            >×</button>
+
+            <div style={{ fontWeight: 800, color: "#f97316", letterSpacing: 1, marginBottom: 8 }}>24ADZ.COM</div>
+            <h2 id="auth-title" style={{ margin: "0 30px 8px 0", fontSize: 26 }}>
+              {user ? "Post an Ad" : authMode === "register" ? "Create your account" : "Login to 24Adz"}
+            </h2>
+            <p style={{ color: "#666", lineHeight: 1.5, marginTop: 0 }}>
+              {user
+                ? "Login verified. The ad-posting form and secure API submission still need to be connected."
+                : authMode === "register"
+                  ? "Register with your email. We will send a verification link."
+                  : "Login or create an account to continue to Post Ad."}
+            </p>
+
+            {authMessage && (
+              <div role="status" style={{ padding: 12, borderRadius: 10, background: "#ecfdf5", color: "#065f46", marginBottom: 14, lineHeight: 1.5 }}>
+                {authMessage}
+              </div>
+            )}
+            {authError && (
+              <div role="alert" style={{ padding: 12, borderRadius: 10, background: "#fef2f2", color: "#991b1b", marginBottom: 14, lineHeight: 1.5 }}>
+                {authError}
+              </div>
+            )}
+
+            {!user && (
+              <form onSubmit={handleAuthSubmit}>
+                <label style={{ display: "block", fontWeight: 600 }}>
+                  Email address
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={authEmail}
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    style={authInputStyle}
+                  />
+                </label>
+                <label style={{ display: "block", fontWeight: 600 }}>
+                  Password
+                  <input
+                    type="password"
+                    autoComplete={authMode === "register" ? "new-password" : "current-password"}
+                    minLength={6}
+                    required
+                    value={authPassword}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    placeholder="At least 6 characters"
+                    style={authInputStyle}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={authBusy || !supabase}
+                  className="search-button"
+                  style={{ width: "100%", opacity: authBusy || !supabase ? 0.6 : 1 }}
+                >
+                  {authBusy ? "Please wait…" : authMode === "register" ? "Register & Verify Email" : "Login"}
+                </button>
+              </form>
+            )}
+
+            {user && (
+              <div style={{ padding: 12, borderRadius: 10, background: "#f5f5f5", marginBottom: 14, overflowWrap: "anywhere" }}>
+                Logged in as <strong>{user.email}</strong>
+              </div>
+            )}
+
+            {!user && (
+              <p style={{ textAlign: "center", margin: "18px 0 0", color: "#555" }}>
+                {authMode === "register" ? "Already registered? " : "New to 24Adz? "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode(authMode === "register" ? "login" : "register");
+                    setAuthError("");
+                    setAuthMessage("");
+                  }}
+                  style={{ border: 0, background: "transparent", color: "#ea580c", fontWeight: 700, cursor: "pointer", fontSize: 15 }}
+                >
+                  {authMode === "register" ? "Login" : "Create account"}
+                </button>
+              </p>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }
