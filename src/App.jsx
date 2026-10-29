@@ -1,550 +1,238 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchAdsPage } from "./api.js";
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || ""
-).replace(/\/$/, "");
+const PAGE_SIZE = 25;
 
 const CATEGORIES = [
-  "Cars",
-  "Bikes",
-  "Mobile",
-  "House",
-  "Jobs",
-  "House Movers",
+  { label: "Cars", icon: "🚗" },
+  { label: "Bikes", icon: "🏍️" },
+  { label: "Mobiles", icon: "📱" },
+  { label: "Laptops", icon: "💻" },
+  { label: "Houses", icon: "🏠" },
+  { label: "Properties", icon: "🏢" },
+  { label: "Jobs", icon: "💼" },
+  { label: "House Movers", icon: "🚚" }
 ];
 
 const DISTRICTS = [
-  "All Tamil Nadu",
-  "Ariyalur",
-  "Chengalpattu",
-  "Chennai",
-  "Coimbatore",
-  "Cuddalore",
-  "Dharmapuri",
-  "Dindigul",
-  "Erode",
-  "Kallakurichi",
-  "Kancheepuram",
-  "Kanniyakumari",
-  "Karur",
-  "Krishnagiri",
-  "Madurai",
-  "Mayiladuthurai",
-  "Nagapattinam",
-  "Namakkal",
-  "Nilgiris",
-  "Perambalur",
-  "Pudukkottai",
-  "Ramanathapuram",
-  "Ranipet",
-  "Salem",
-  "Sivaganga",
-  "Tenkasi",
-  "Thanjavur",
-  "Theni",
-  "Thoothukudi",
-  "Tiruchirappalli",
-  "Tirunelveli",
-  "Tirupathur",
-  "Tiruppur",
-  "Tiruvallur",
-  "Tiruvannamalai",
-  "Tiruvarur",
-  "Vellore",
-  "Viluppuram",
-  "Virudhunagar",
+  "Ariyalur", "Chengalpattu", "Chennai", "Coimbatore", "Cuddalore",
+  "Dharmapuri", "Dindigul", "Erode", "Kallakurichi", "Kancheepuram",
+  "Kanniyakumari", "Karur", "Krishnagiri", "Madurai", "Mayiladuthurai",
+  "Nagapattinam", "Namakkal", "Nilgiris", "Perambalur", "Pudukkottai",
+  "Ramanathapuram", "Ranipet", "Salem", "Sivaganga", "Tenkasi",
+  "Thanjavur", "Theni", "Thoothukudi", "Tiruchirappalli", "Tirunelveli",
+  "Tirupathur", "Tiruppur", "Tiruvallur", "Tiruvannamalai", "Tiruvarur",
+  "Vellore", "Viluppuram", "Virudhunagar"
 ];
 
-const CATEGORY_ICONS = [
-  "🚗",
-  "🏍️",
-  "📱",
-  "🏠",
-  "💼",
-  "🚚",
-];
-
-function getAdId(ad, index) {
-  return ad.id ?? ad.ad_id ?? ad.slug ?? index;
+function getTitle(ad) {
+  return ad.title || ad.name || "Untitled Ad";
 }
 
-function getAdPhone(ad) {
-  return ad.phone || ad.phone_number || ad.mobile || "";
+function getLocation(ad) {
+  return ad.location || ad.area || ad.district || "Tamil Nadu";
 }
 
-function getAdWhatsApp(ad) {
-  return ad.whatsapp || ad.whatsapp_number || getAdPhone(ad);
-}
-
-function getAdLocation(ad) {
-  return ad.location || ad.area || ad.district || "";
-}
-
-function getAdImage(ad) {
-  return (
-    ad.image_url ||
-    ad.imageUrl ||
-    ad.image ||
-    ad.photo_url ||
-    ad.image_key_url ||
-    ""
-  );
-}
-
-function normalizePhone(phone) {
-  return String(phone || "").replace(/\D/g, "");
-}
-
-function makeWhatsAppUrl(phone) {
-  let number = normalizePhone(phone);
-
-  if (!number) return "";
-
-  if (number.length === 10) {
-    number = "91" + number;
+function getPrice(ad) {
+  if (ad.price === null || ad.price === undefined || ad.price === "") {
+    return "Price on request";
   }
-
-  return `https://wa.me/${number}`;
+  return typeof ad.price === "number"
+    ? `₹${ad.price.toLocaleString("en-IN")}`
+    : String(ad.price);
 }
 
-function isPublished(ad) {
-  if (
-    ad.published === true ||
-    ad.published === 1 ||
-    ad.published === "1"
-  ) {
-    return true;
-  }
+function getImage(ad) {
+  return ad.image_url || ad.image || ad.imageUrl || "";
+}
 
-  if (
-    typeof ad.status === "string" &&
-    ad.status.toLowerCase() === "published"
-  ) {
-    return true;
-  }
+function isPaidAd(ad) {
+  const paidValue = String(
+    ad.is_paid ?? ad.paid ?? ad.is_premium ?? ad.premium ?? ad.ad_type ?? ad.plan ?? ""
+  ).toLowerCase();
+  const status = String(ad.promotion_status || ad.payment_status || "").toLowerCase();
+  return ["true", "1", "paid", "premium", "promoted", "featured"].includes(paidValue) ||
+    ["paid", "active", "success", "completed"].includes(status) &&
+    Boolean(ad.is_paid || ad.paid || ad.is_premium || ad.premium || ad.promotion_status);
+}
 
-  // If the API returns public ads without status fields.
-  return ad.published === undefined && ad.status === undefined;
+function getAdDate(ad) {
+  const value = ad.created_at || ad.createdAt || ad.posted_at || ad.postedAt || ad.published_at || ad.date || "";
+  const timestamp = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortAds(ads) {
+  return [...ads].sort((a, b) => {
+    const paidDifference = Number(isPaidAd(b)) - Number(isPaidAd(a));
+    if (paidDifference !== 0) return paidDifference;
+    return getAdDate(b) - getAdDate(a);
+  });
 }
 
 export default function App() {
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("All Categories");
-  const [district, setDistrict] = useState("All Tamil Nadu");
-
   const [ads, setAds] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [apiError, setApiError] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [category, setCategory] = useState("");
+  const [district, setDistrict] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [apiMessage, setApiMessage] = useState("Loading live ads…");
 
-  // Load published ads from the Cloudflare API.
+  useEffect(() => {
+    setPage(1);
+  }, [category, district, search]);
+
   useEffect(() => {
     let cancelled = false;
-
-    async function loadAds() {
+    async function load() {
       setLoading(true);
-      setApiError("");
-
-      if (!API_BASE_URL) {
-        setAds([]);
-        setApiError(
-          "API URL is not configured. Set VITE_API_BASE_URL in your Vite project."
-        );
-        setLoading(false);
-        return;
-      }
-
       try {
-        const response = await fetch(
-          `${API_BASE_URL}/ads`,
-          {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-            },
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            `Ads API error: HTTP ${response.status}`
-          );
-        }
-
-        const result = await response.json();
-
-        const data = Array.isArray(result)
-          ? result
-          : Array.isArray(result.ads)
-            ? result.ads
-            : Array.isArray(result.data)
-              ? result.data
-              : null;
-
-        if (!data) {
-          throw new Error(
-            "API response does not contain an ads array."
-          );
-        }
-
-        if (!cancelled) {
-          setAds(data.filter(isPublished));
-        }
+        const result = await fetchAdsPage({
+          category,
+          district,
+          search,
+          page,
+          limit: PAGE_SIZE
+        });
+        if (cancelled) return;
+        const liveAds = Array.isArray(result?.ads) ? result.ads : [];
+        setAds(sortAds(liveAds));
+        setHasMore(Boolean(result?.hasMore));
+        setTotal(typeof result?.total === "number" ? result.total : null);
+        setApiMessage(liveAds.length
+          ? "Showing live ads from 24Adz."
+          : "No live ads found for this page. Try another search or category.");
       } catch (error) {
         if (!cancelled) {
           setAds([]);
-
-          setApiError(
-            error instanceof Error
-              ? error.message
-              : "Unable to load ads."
-          );
+          setHasMore(false);
+          setTotal(null);
+          setApiMessage(`Could not load live ads: ${error?.message || "Please try again."}`);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
+    load();
+    return () => { cancelled = true; };
+  }, [category, district, search, page]);
 
-    loadAds();
+  const visibleAds = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return ads.filter((ad) => {
+      const matchesCategory = !category || String(ad.category || "").toLowerCase() === category.toLowerCase();
+      const adDistrict = String(ad.district || getLocation(ad)).toLowerCase();
+      const matchesDistrict = !district || adDistrict.includes(district.toLowerCase());
+      const matchesSearch = !q || `${getTitle(ad)} ${ad.description || ""} ${getLocation(ad)} ${ad.category || ""}`.toLowerCase().includes(q);
+      return matchesCategory && matchesDistrict && matchesSearch;
+    });
+  }, [ads, category, district, search]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshKey]);
-
-  // Search and filter ads.
-  const filteredAds = useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    return ads
-      .filter((ad) => {
-        const adCategory = String(
-          ad.category || ""
-        ).toLowerCase();
-
-        const matchesCategory =
-          category === "All Categories" ||
-          adCategory === category.toLowerCase();
-
-        const location = getAdLocation(ad).toLowerCase();
-
-        const matchesDistrict =
-          district === "All Tamil Nadu" ||
-          location.includes(district.toLowerCase());
-
-        const searchableText = [
-          ad.title,
-          ad.description,
-          ad.category,
-          ad.location,
-          ad.area,
-          ad.district,
-          ad.model,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        return (
-          matchesCategory &&
-          matchesDistrict &&
-          searchableText.includes(query)
-        );
-      })
-      .slice(0, 25);
-  }, [ads, search, category, district]);
+  function clearFilters() {
+    setCategory("");
+    setDistrict("");
+    setSearch("");
+    setPage(1);
+  }
 
   return (
-    <div className="app">
-      {/* HEADER */}
-      <header className="header">
-        <a className="logo" href="/">
-          <span>24</span>Adz
-          <span className="dot">.com</span>
+    <div className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="24Adz home">
+          <span className="brand-mark">24</span><span className="brand-text">Adz<span>.com</span></span>
         </a>
-
-        <p>TAMIL NADU CLASSIFIEDS</p>
-
-        <a className="admin" href="/admin">
-          Admin Login
-        </a>
+        <div className="top-note">Tamil Nadu Classifieds</div>
+        <a className="post-button" href="#how-to-post">＋ Post Ad</a>
       </header>
 
       <main>
-        {/* HERO AND SEARCH */}
         <section className="hero">
-          <span className="badge">
-            TAMIL NADU'S CLASSIFIEDS
-          </span>
-
-          <h1>
-            Buy. Sell. <span>Connect.</span>
-          </h1>
-
-          <p>
-            Find great deals near you with 24Adz.com.
-          </p>
-
-          <form
-            className="search-box"
-            onSubmit={(event) => {
-              event.preventDefault();
-            }}
-          >
-            <input
-              type="search"
-              value={search}
-              onChange={(event) =>
-                setSearch(event.target.value)
-              }
-              placeholder="What are you looking for?"
-              aria-label="Search advertisements"
-            />
-
-            <select
-              value={category}
-              onChange={(event) =>
-                setCategory(event.target.value)
-              }
-              aria-label="Select category"
-            >
-              <option value="All Categories">
-                All Categories
-              </option>
-
-              {CATEGORIES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={district}
-              onChange={(event) =>
-                setDistrict(event.target.value)
-              }
-              aria-label="Select district"
-            >
-              {DISTRICTS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-
-            <button type="submit">
-              Search
-            </button>
-          </form>
+          <div className="eyebrow"><span className="live-dot" /> LOCAL FINDS. BETTER DEALS.</div>
+          <h1>Find it nearby.<br /><span>Make it yours.</span></h1>
+          <p>Discover cars, bikes, mobiles, properties and jobs across Tiruppur and Tamil Nadu.</p>
+          <div className="search-panel">
+            <label className="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="What are you looking for?" aria-label="Search ads" />
+            </label>
+            <label className="select-field">
+              <span>District</span>
+              <select value={district} onChange={(e) => setDistrict(e.target.value)} aria-label="Select district">
+                <option value="">All Tamil Nadu</option>
+                {DISTRICTS.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <button className="search-button" onClick={() => document.querySelector(".ads-section")?.scrollIntoView({ behavior: "smooth" })}>Search Ads</button>
+          </div>
+          <div className="hero-foot"><span>✓ Local listings</span><span>✓ Simple search</span><span>✓ Buyer safety first</span></div>
         </section>
 
-        {/* CATEGORIES */}
-        <section className="categories">
-          <h2>Explore Categories</h2>
-
-          <p>
-            Discover deals across Tamil Nadu
-          </p>
-
+        <section className="section category-section">
+          <div className="section-heading">
+            <div><p className="kicker">BROWSE BY CATEGORY</p><h2>What are you looking for?</h2></div>
+            <button className="text-button" onClick={clearFilters}>Clear filters ↗</button>
+          </div>
           <div className="category-grid">
-            {CATEGORIES.map((item, index) => (
-              <button
-                className={
-                  category === item
-                    ? "category-card active"
-                    : "category-card"
-                }
-                key={item}
-                type="button"
-                onClick={() =>
-                  setCategory(
-                    category === item
-                      ? "All Categories"
-                      : item
-                  )
-                }
-                aria-pressed={category === item}
-              >
-                <span className="category-icon">
-                  {CATEGORY_ICONS[index]}
-                </span>
-
-                <strong>{item}</strong>
-
-                <span className="arrow">
-                  Explore →
-                </span>
+            {CATEGORIES.map((item) => (
+              <button key={item.label} className={`category-card ${category === item.label ? "selected" : ""}`} onClick={() => setCategory(category === item.label ? "" : item.label)} aria-pressed={category === item.label}>
+                <span className="category-icon">{item.icon}</span><span>{item.label}</span><span className="category-arrow">↗</span>
               </button>
             ))}
           </div>
         </section>
 
-        {/* LATEST ADS */}
-        <section className="listings">
-          <div className="listings-heading">
-            <div>
-              <h2>Latest Ads</h2>
-
-              <p>
-                Find the latest listings across Tamil Nadu.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              className="refresh-button"
-              onClick={() =>
-                setRefreshKey((value) => value + 1)
-              }
-            >
-              Refresh Ads
-            </button>
+        <section className="section ads-section">
+          <div className="section-heading">
+            <div><p className="kicker">FRESH FROM YOUR AREA</p><h2>{category ? `${category} for you` : "Latest ads"}</h2></div>
+            <span className="result-count">{total !== null ? `${total} listings` : `${visibleAds.length} listings on this page`}</span>
           </div>
-
-          {loading ? (
-            <div className="empty-state">
-              <span>⏳</span>
-              <h3>Loading listings...</h3>
-              <p>Please wait while ads are loading.</p>
-            </div>
-          ) : apiError ? (
-            <div className="empty-state">
-              <span>⚠️</span>
-              <h3>Ads could not be loaded</h3>
-              <p>{apiError}</p>
-            </div>
-          ) : filteredAds.length === 0 ? (
-            <div className="empty-state">
-              <span>📢</span>
-              <h3>No ads found</h3>
-              <p>
-                Try another search, category, or district.
-                Published ads will appear here.
-              </p>
-            </div>
-          ) : (
+          <div className="api-status" role="status"><span className="status-dot" />{loading ? "Loading ads…" : apiMessage}</div>
+          {visibleAds.length ? (
             <div className="ads-grid">
-              {filteredAds.map((ad, index) => {
-                const phone = getAdPhone(ad);
-                const whatsapp = getAdWhatsApp(ad);
-                const image = getAdImage(ad);
-
-                return (
-                  <article
-                    className="ad-card"
-                    key={getAdId(ad, index)}
-                  >
-                    {image ? (
-                      <img
-                        className="ad-image"
-                        src={image}
-                        alt={ad.title || "Advertisement"}
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="ad-image ad-image-placeholder">
-                        📦
-                      </div>
-                    )}
-
-                    <div className="ad-content">
-                      <div className="ad-meta">
-                        <span>
-                          {ad.category || "Classified"}
-                        </span>
-
-                        {getAdLocation(ad) && (
-                          <span>
-                            {getAdLocation(ad)}
-                          </span>
-                        )}
-                      </div>
-
-                      <h3>
-                        {ad.title || "Untitled Ad"}
-                      </h3>
-
-                      {ad.model && (
-                        <p className="ad-model">
-                          {ad.model}
-                        </p>
-                      )}
-
-                      <p className="ad-description">
-                        {ad.description ||
-                          "Contact the advertiser for details."}
-                      </p>
-
-                      {ad.price !== undefined &&
-                        ad.price !== null &&
-                        ad.price !== "" && (
-                          <strong className="ad-price">
-                            ₹
-                            {Number(ad.price).toLocaleString(
-                              "en-IN"
-                            )}
-                          </strong>
-                        )}
-
-                      <div className="ad-actions">
-                        {phone && (
-                          <a
-                            className="call-button"
-                            href={`tel:${String(phone).replace(
-                              /[^\d+]/g,
-                              ""
-                            )}`}
-                          >
-                            Call
-                          </a>
-                        )}
-
-                        {whatsapp && (
-                          <a
-                            className="whatsapp-button"
-                            href={makeWhatsAppUrl(whatsapp)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            WhatsApp
-                          </a>
-                        )}
-                      </div>
+              {visibleAds.map((ad, index) => (
+                <article className="ad-card" key={ad.id || ad.ad_id || `${getTitle(ad)}-${index}`}>
+                  <div className="ad-image">
+                    {getImage(ad) ? <img src={getImage(ad)} alt={getTitle(ad)} loading="lazy" /> : <div className="image-placeholder"><span>{CATEGORIES.find((c) => c.label.toLowerCase() === String(ad.category || "").toLowerCase())?.icon || "✦"}</span><small>24Adz Marketplace</small></div>}
+                    {isPaidAd(ad) && <span className="premium-badge">★ PREMIUM</span>}
+                  </div>
+                  <div className="ad-content">
+                    <div className="ad-category">{ad.category || "CLASSIFIED"}</div>
+                    <h3>{getTitle(ad)}</h3>
+                    <p className="ad-description">{ad.description || "Contact the advertiser for more details."}</p>
+                    <div className="ad-meta"><span>⌖ {getLocation(ad)}</span><strong>{getPrice(ad)}</strong></div>
+                    <div className="ad-actions">
+                      {ad.phone || ad.contact_phone ? <a href={`tel:${ad.phone || ad.contact_phone}`}>Call</a> : <span className="disabled-action">Call</span>}
+                      {ad.whatsapp || ad.whatsapp_number ? <a className="whatsapp-link" href={`https://wa.me/${String(ad.whatsapp || ad.whatsapp_number).replace(/\D/g, "")}`} target="_blank" rel="noreferrer">WhatsApp</a> : <span className="disabled-action">WhatsApp</span>}
                     </div>
-                  </article>
-                );
-              })}
+                  </div>
+                </article>
+              ))}
             </div>
-          )}
+          ) : !loading ? (
+            <div className="empty-state"><span>⌕</span><h3>No live ads found</h3><p>Try another search or clear the filters. Demo listings are not shown as real ads.</p><button className="search-button" onClick={clearFilters}>Show all ads</button></div>
+          ) : null}
+
+          <div className="section-heading" style={{ marginTop: 24, alignItems: "center" }}>
+            <button className="text-button" disabled={page <= 1 || loading} onClick={() => { setPage((current) => Math.max(1, current - 1)); document.querySelector(".ads-section")?.scrollIntoView({ behavior: "smooth" }); }} style={{ opacity: page <= 1 || loading ? 0.45 : 1, cursor: page <= 1 || loading ? "not-allowed" : "pointer" }}>← Previous</button>
+            <span className="result-count">Page {page}</span>
+            <button className="text-button" disabled={!hasMore || loading} onClick={() => { setPage((current) => current + 1); document.querySelector(".ads-section")?.scrollIntoView({ behavior: "smooth" }); }} style={{ opacity: !hasMore || loading ? 0.45 : 1, cursor: !hasMore || loading ? "not-allowed" : "pointer" }}>Next 25 Ads →</button>
+          </div>
         </section>
 
-        {/* SAFETY */}
-        <section className="safety">
-          <strong>
-            🛡️ Stay Safe on 24Adz
-          </strong>
-
-          <p>
-            Inspect items before buying.
-            Never pay an advance to unknown sellers.
-          </p>
+        <section className="safety-banner" id="how-to-post">
+          <div><p className="kicker">STAY SAFE</p><h2>Smart deals start with safe choices.</h2><p>Inspect items, verify the seller, and never send an advance payment to an unknown person.</p></div>
+          <div className="safety-icon">✓</div>
         </section>
       </main>
 
-      {/* FOOTER */}
-      <footer>
-        <a className="logo" href="/">
-          <span>24</span>Adz
-          <span className="dot">.com</span>
-        </a>
-
-        <p>Tamil Nadu Classifieds</p>
-
-        <p>© 2026 24Adz.com</p>
+      <footer className="footer">
+        <a className="brand" href="/"><span className="brand-mark">24</span><span className="brand-text">Adz<span>.com</span></span></a>
+        <span>Local classifieds for Tamil Nadu.</span>
+        <span>© {new Date().getFullYear()} 24Adz.com</span>
       </footer>
     </div>
   );
-              }
+}
